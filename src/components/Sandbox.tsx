@@ -38,8 +38,6 @@ const Sandbox: React.FC = () => {
   const dashesRef = useRef<number>(maxDashes);
   const dashProgressRef = useRef<number>(1);
   const lastTimeRef = useRef<number>(0);
-  const dashRingUiRef = useRef<SVGCircleElement>(null);
-  const dashTextUiRef = useRef<HTMLSpanElement>(null);
   
   const [dimensions, setDimensions] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [score, setScore] = useState({ team0: 0, team1: 0 });
@@ -217,6 +215,63 @@ const Sandbox: React.FC = () => {
         const ball = worldRef.current.entities.find(e => e instanceof Ball) as Ball | undefined;
         const isPortrait = h > w;
         
+        const scaleU = isPortrait ? w / 68 : h / 68;
+        const boxW = 40.32 * scaleU;
+        const boxH = 16.5 * scaleU;
+        
+        const inPenaltyBox = (pos: Vector2) => {
+            if (isPortrait) {
+                const inX = pos.x > (w - boxW) / 2 && pos.x < (w + boxW) / 2;
+                const inBot = pos.y > h - boxH;
+                const inTop = pos.y < boxH;
+                return inX && (inBot || inTop);
+            } else {
+                const inY = pos.y > (h - boxW) / 2 && pos.y < (h + boxW) / 2;
+                const inLeft = pos.x < boxH;
+                const inRight = pos.x > w - boxH;
+                return inY && (inLeft || inRight);
+            }
+        };
+
+        const clampToPenaltyBoxEdge = (pos: Vector2) => {
+            if (!inPenaltyBox(pos)) return pos;
+            const newPos = new Vector2(pos.x, pos.y);
+            if (isPortrait) {
+                const leftDiff = Math.abs(pos.x - (w - boxW) / 2);
+                const rightDiff = Math.abs(pos.x - (w + boxW) / 2);
+                if (pos.y < h / 2) {
+                    const bottomDiff = Math.abs(pos.y - boxH);
+                    const min = Math.min(leftDiff, rightDiff, bottomDiff);
+                    if (min === bottomDiff) newPos.y = boxH;
+                    else if (min === leftDiff) newPos.x = (w - boxW) / 2;
+                    else newPos.x = (w + boxW) / 2;
+                } else {
+                    const topDiff = Math.abs(pos.y - (h - boxH));
+                    const min = Math.min(leftDiff, rightDiff, topDiff);
+                    if (min === topDiff) newPos.y = h - boxH;
+                    else if (min === leftDiff) newPos.x = (w - boxW) / 2;
+                    else newPos.x = (w + boxW) / 2;
+                }
+            } else {
+                const topDiff = Math.abs(pos.y - (h - boxW) / 2);
+                const botDiff = Math.abs(pos.y - (h + boxW) / 2);
+                if (pos.x < w / 2) {
+                    const rightDiff = Math.abs(pos.x - boxH);
+                    const min = Math.min(topDiff, botDiff, rightDiff);
+                    if (min === rightDiff) newPos.x = boxH;
+                    else if (min === topDiff) newPos.y = (h - boxW) / 2;
+                    else newPos.y = (h + boxW) / 2;
+                } else {
+                    const leftDiff = Math.abs(pos.x - (w - boxH));
+                    const min = Math.min(topDiff, botDiff, leftDiff);
+                    if (min === leftDiff) newPos.x = w - boxH;
+                    else if (min === topDiff) newPos.y = (h - boxW) / 2;
+                    else newPos.y = (h + boxW) / 2;
+                }
+            }
+            return newPos;
+        };
+        
         if (ball) {
             let closestDstSq = Infinity;
             let closestTeammate: Player | null = null;
@@ -321,6 +376,13 @@ const Sandbox: React.FC = () => {
                         }
                         
                         speed = 0.8;
+                    }
+                    
+                    // Restrict non-primary AI from entering the penalty boxes
+                    // so there is only one AI per team allowed in the 18-yard box.
+                    if ((entity.team === 1 && entity !== closestT1) || (entity.team === 0)) {
+                        // All non-primary players stay out, including teammates since user controls one Primary
+                        targetPos = clampToPenaltyBoxEdge(targetPos);
                     }
                     
                     const dir = targetPos.sub(entity.pos);
@@ -600,15 +662,40 @@ const Sandbox: React.FC = () => {
                 ctx.stroke();
             }
             
-            // Ring for active player
+            // Ring for active player showing dashes
             if (entity instanceof Player && entity.isActive) {
-                ctx.beginPath();
-                ctx.arc(entity.pos.x, entity.pos.y, entity.radius + 10, 0, Math.PI * 2);
-                ctx.strokeStyle = '#111827';
-                ctx.lineWidth = 3;
-                ctx.setLineDash([8, 8]);
-                ctx.stroke();
-                ctx.setLineDash([]); // reset
+                const segments = maxDashes;
+                const gap = 0.25; // radians gap between segments
+                const arcLen = (Math.PI * 2) / segments - gap;
+                const radius = entity.radius + 12;
+
+                ctx.lineWidth = 4;
+                ctx.lineCap = 'round';
+
+                for (let i = 0; i < segments; i++) {
+                    const startAngle = i * (arcLen + gap) - Math.PI / 2;
+                    
+                    // Background track segment
+                    ctx.beginPath();
+                    ctx.arc(entity.pos.x, entity.pos.y, radius, startAngle, startAngle + arcLen);
+                    ctx.strokeStyle = 'rgba(17, 24, 39, 0.15)'; // faint dark trace
+                    ctx.stroke();
+
+                    // Filled dash segment
+                    let fillRatio = 0;
+                    if (i < dashesRef.current) {
+                        fillRatio = 1;
+                    } else if (i === dashesRef.current) {
+                        fillRatio = dashProgressRef.current;
+                    }
+
+                    if (fillRatio > 0) {
+                        ctx.beginPath();
+                        ctx.arc(entity.pos.x, entity.pos.y, radius, startAngle, startAngle + arcLen * fillRatio);
+                        ctx.strokeStyle = '#22c55e'; // Green active
+                        ctx.stroke();
+                    }
+                }
             }
         }
 
@@ -646,12 +733,6 @@ const Sandbox: React.FC = () => {
             }
         } else {
             dashProgressRef.current = 1;
-        }
-
-        // Update DOM element for dash UI
-        if (dashRingUiRef.current && dashTextUiRef.current) {
-            dashTextUiRef.current.innerText = dashesRef.current.toString();
-            dashRingUiRef.current.style.strokeDashoffset = `${1 - dashProgressRef.current}`;
         }
 
         requestRef.current = requestAnimationFrame(render);
@@ -770,32 +851,8 @@ const Sandbox: React.FC = () => {
         </div>
         
         {/* "Flick" zone visual indicator (right side) */}
-        <div className="absolute bottom-12 right-12 flex items-center justify-center pointer-events-none z-10 w-28 h-28 bg-white rounded-full border-4 border-[#111827] shadow-[4px_4px_0_0_#111827] opacity-90">
-            {/* SVG Progress Ring */}
-            <svg className="absolute inset-x-0 inset-y-0 w-full h-full -rotate-90 pointer-events-none" viewBox="0 0 100 100">
-                {/* Dashed track */}
-                <circle cx="50" cy="50" r="42" fill="none" stroke="#e2e8f0" strokeWidth="8" strokeDasharray="6 6" />
-                {/* Progress Ring */}
-                <circle 
-                    ref={dashRingUiRef}
-                    cx="50" cy="50" r="42" 
-                    fill="none" 
-                    stroke="#fbbf24" 
-                    strokeWidth="8" 
-                    strokeLinecap="round"
-                    pathLength="1"
-                    strokeDasharray="1"
-                    strokeDashoffset="0"
-                    style={{ transition: 'stroke-dashoffset 0.1s linear' }}
-                />
-            </svg>
-            <div className="flex flex-col items-center justify-center z-10">
-                <span className="text-2xl font-black text-[#111827] tracking-tighter">FLICK</span>
-                <div className="flex items-center space-x-1 mt-1 text-sm font-bold text-gray-400">
-                    <span ref={dashTextUiRef}>5</span>
-                    <span>/ 5</span>
-                </div>
-            </div>
+        <div className="absolute bottom-12 right-12 flex flex-col items-center justify-center pointer-events-none z-10 w-28 h-28 bg-white rounded-full border-4 border-[#111827] shadow-[4px_4px_0_0_#111827] opacity-90">
+            <span className="text-2xl font-black text-[#111827] tracking-tighter">FLICK</span>
         </div>
 
         <AnimatePresence>
