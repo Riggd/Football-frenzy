@@ -40,10 +40,14 @@ export class World {
       for (const entity of this.entities) {
         if (!entity.isStatic) {
           entity.pos = entity.pos.add(entity.vel.div(subSteps));
-          this.checkBoundaryCollisions(entity);
         }
       }
       this.checkEntityCollisions();
+      for (const entity of this.entities) {
+        if (!entity.isStatic) {
+          this.checkBoundaryCollisions(entity);
+        }
+      }
     }
   }
 
@@ -70,27 +74,27 @@ export class World {
       if (inGoal && !this.isPortrait) {
          if (entity.pos.x + entity.radius < -goalDepth) {
              entity.pos.x = -goalDepth + entity.radius;
-             entity.vel.x *= -entity.restitution;
+             if (entity.vel.x < 0) entity.vel.x *= -entity.restitution;
          }
          if (entity instanceof Ball && entity.pos.x + entity.radius < 0) {
              this.onGoal?.(1); // Team 1 scored on Team 0's goal
          }
       } else {
         entity.pos.x = entity.radius;
-        entity.vel.x *= -entity.restitution;
+        if (entity.vel.x < 0) entity.vel.x *= -entity.restitution;
       }
     } else if (entity.pos.x + entity.radius > this.width) {
       if (inGoal && !this.isPortrait) {
          if (entity.pos.x - entity.radius > this.width + goalDepth) {
              entity.pos.x = this.width + goalDepth - entity.radius;
-             entity.vel.x *= -entity.restitution;
+             if (entity.vel.x > 0) entity.vel.x *= -entity.restitution;
          }
          if (entity instanceof Ball && entity.pos.x - entity.radius > this.width) {
              this.onGoal?.(0); // Team 0 scored on Team 1's goal
          }
       } else {
         entity.pos.x = this.width - entity.radius;
-        entity.vel.x *= -entity.restitution;
+        if (entity.vel.x > 0) entity.vel.x *= -entity.restitution;
       }
     }
 
@@ -99,28 +103,44 @@ export class World {
       if (inGoal && this.isPortrait) {
          if (entity.pos.y + entity.radius < -goalDepth) {
              entity.pos.y = -goalDepth + entity.radius;
-             entity.vel.y *= -entity.restitution;
+             if (entity.vel.y < 0) entity.vel.y *= -entity.restitution;
          }
          if (entity instanceof Ball && entity.pos.y + entity.radius < 0) {
              this.onGoal?.(0); // Team 0 (bottom) scored on Team 1 (top)'s goal
          }
       } else {
         entity.pos.y = entity.radius;
-        entity.vel.y *= -entity.restitution;
+        if (entity.vel.y < 0) entity.vel.y *= -entity.restitution;
       }
     } else if (entity.pos.y + entity.radius > this.height) {
       if (inGoal && this.isPortrait) {
          if (entity.pos.y - entity.radius > this.height + goalDepth) {
              entity.pos.y = this.height + goalDepth - entity.radius;
-             entity.vel.y *= -entity.restitution;
+             if (entity.vel.y > 0) entity.vel.y *= -entity.restitution;
          }
          if (entity instanceof Ball && entity.pos.y - entity.radius > this.height) {
              this.onGoal?.(1); // Team 1 (top) scored on Team 0 (bottom)'s goal
          }
       } else {
         entity.pos.y = this.height - entity.radius;
-        entity.vel.y *= -entity.restitution;
+        if (entity.vel.y > 0) entity.vel.y *= -entity.restitution;
       }
+    }
+
+    // Anti-corner/stick logic for the ball
+    if (entity instanceof Ball) {
+        const isNearLeft = entity.pos.x - entity.radius < 5;
+        const isNearRight = entity.pos.x + entity.radius > this.width - 5;
+        const isNearTop = entity.pos.y - entity.radius < 5;
+        const isNearBottom = entity.pos.y + entity.radius > this.height - 5;
+
+        // If it's near a wall and moving very slowly, give it a tiny nudge away
+        if (entity.vel.magSq() < 10) {
+            if (isNearLeft) entity.vel.x += 0.5;
+            if (isNearRight) entity.vel.x -= 0.5;
+            if (isNearTop) entity.vel.y += 0.5;
+            if (isNearBottom) entity.vel.y -= 0.5;
+        }
     }
   }
 

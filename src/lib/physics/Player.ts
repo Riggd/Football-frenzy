@@ -1,21 +1,26 @@
 import { Entity } from './Entity';
 import { Vector2 } from '../math/Vector2';
+import { PlayerStats } from '../../data/teams';
 
 export class Player extends Entity {
   team: number;
   isActive: boolean;
   maxSpeed: number;
   number: number;
+  stats: PlayerStats;
   
   constructor({
-    id, x, y, radius = 20, mass = 2, restitution = 0.5, friction = 0.9, color,
-    team = 0, isActive = false, maxSpeed = 5, number = 1
+    id, x, y, radius = 20, mass = 3, restitution = 0.2, friction = 0.88, color,
+    team = 0, isActive = false, maxSpeed = 5, number = 1,
+    stats = { shotPower: 80, sprintSpeed: 80, recoverySpeed: 80 }
   }: any) {
     super({ id, x, y, radius, mass, restitution, friction, color, isStatic: false });
     this.team = team;
     this.isActive = isActive;
-    this.maxSpeed = maxSpeed;
+    // Map sprintSpeed 0-100 to maxSpeed 2.5-5.5
+    this.maxSpeed = 2.5 + (stats.sprintSpeed / 100) * 3.0;
     this.number = number;
+    this.stats = stats;
   }
   
   limitVelocity() {

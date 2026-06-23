@@ -8,12 +8,9 @@ import { Vector2 } from '../lib/math/Vector2';
 
 const MAX_JOYSTICK_RADIUS = 80;
 
-const TEAMS = [
-    { id: 0, name: 'USA', color: '#3b82f6', text: 'text-blue-600' },
-    { id: 1, name: 'ARG', color: '#60a5fa', text: 'text-blue-400' },
-    { id: 2, name: 'BRA', color: '#fbbf24', text: 'text-yellow-500' },
-    { id: 3, name: 'FRA', color: '#1d4ed8', text: 'text-blue-700' },
-];
+import { TEAMS } from '../data/teams';
+import { TeamBrain } from '../lib/ai/TeamBrain';
+import { PlayerAI } from '../lib/ai/PlayerAI';
 
 type JoystickState = {
   active: boolean;
@@ -38,6 +35,8 @@ const Sandbox: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLElement>(null);
   const worldRef = useRef<World | null>(null);
+  const team0BrainRef = useRef<TeamBrain | null>(null);
+  const team1BrainRef = useRef<TeamBrain | null>(null);
   const requestRef = useRef<number>();
   const activePlayerRef = useRef<Player | null>(null);
   const particlesRef = useRef<Particle[]>([]);
@@ -46,12 +45,16 @@ const Sandbox: React.FC = () => {
   const dashesRef = useRef<number>(maxDashes);
   const dashProgressRef = useRef<number>(1);
   const lastTimeRef = useRef<number>(0);
+  const kickoffOccurredRef = useRef<boolean>(false);
+  const kickoffTeamRef = useRef<number>(0);
   
-  type GameState = 'MAIN_MENU' | 'PLAYING' | 'PAUSED' | 'TEAM_SELECT' | 'MODE_SELECT';
+  type GameState = 'MAIN_MENU' | 'PLAYING' | 'PAUSED' | 'USER_TEAM_SELECT' | 'OPPONENT_TEAM_SELECT' | 'MODE_SELECT';
   const [gameState, setGameState] = useState<GameState>('MAIN_MENU');
   const gameStateRef = useRef<GameState>('MAIN_MENU');
   const [gameMode, setGameMode] = useState<'FREEPLAY' | 'TIMED' | 'STORY'>('FREEPLAY');
   const [selectedTeam, setSelectedTeam] = useState<number>(0);
+  const [opponentTeam, setOpponentTeam] = useState<number>(1);
+  const [timeRemaining, setTimeRemaining] = useState<number>(180);
 
   const updateGameState = useCallback((newState: GameState) => {
       setGameState(newState);
@@ -95,10 +98,21 @@ const Sandbox: React.FC = () => {
   const dimensionsRef = useRef(dimensions);
   dimensionsRef.current = dimensions;
 
+  const selectedTeamRef = useRef(selectedTeam);
+  selectedTeamRef.current = selectedTeam;
+  const opponentTeamRef = useRef(opponentTeam);
+  opponentTeamRef.current = opponentTeam;
+
   const initWorld = useCallback((possessionTeamId: number = 0) => {
     const w = dimensionsRef.current.width;
     const h = dimensionsRef.current.height;
     if (w === 0 || h === 0) return;
+    
+    kickoffOccurredRef.current = false;
+    kickoffTeamRef.current = possessionTeamId;
+
+    const t0Color = TEAMS[selectedTeamRef.current].color;
+    const t1Color = TEAMS[opponentTeamRef.current].color;
 
     const isPortrait = h > w;
     const u = isPortrait ? w / 68 : h / 68;
@@ -133,12 +147,14 @@ const Sandbox: React.FC = () => {
         if (isResettingRef.current) return;
         isResettingRef.current = true;
         
-        setShowGoalOverlay(true);
-
-        setScore(s => ({
-            ...s,
-            [teamScoredId === 0 ? 'team0' : 'team1']: s[teamScoredId === 0 ? 'team0' : 'team1'] + 1
-        }));
+        if (gameStateRef.current === 'PLAYING') {
+            setShowGoalOverlay(true);
+            
+            setScore(s => ({
+                ...s,
+                [teamScoredId === 0 ? 'team0' : 'team1']: s[teamScoredId === 0 ? 'team0' : 'team1'] + 1
+            }));
+        }
 
         // The team that was scored ON gets possession
         const scoredOnTeam = teamScoredId === 0 ? 1 : 0;
@@ -146,7 +162,11 @@ const Sandbox: React.FC = () => {
         setTimeout(() => {
             initWorld(scoredOnTeam);
             isResettingRef.current = false;
-            setShowGoalOverlay(false);
+            if (gameStateRef.current === 'PLAYING') {
+                setShowGoalOverlay(false);
+            } else {
+                setShowGoalOverlay(false); // Make sure it's reset anyway
+            }
         }, 3000);
     });
 
@@ -154,19 +174,22 @@ const Sandbox: React.FC = () => {
     const ball = new Ball({ x: w / 2, y: h / 2, radius: 10, mass: 0.5, color: '#111827' });
     world.addEntity(ball);
 
+    const t0Roster = TEAMS[selectedTeamRef.current].roster;
+    const t1Roster = TEAMS[opponentTeamRef.current].roster;
+
     if (isPortrait) {
         // Teams 0 (Bottom) & 1 (Top)
         const t0KickoffY = possessionTeamId === 0 ? h / 2 + 50 : h - 200;
         const t1KickoffY = possessionTeamId === 1 ? h / 2 - 50 : 200;
 
-        const p1 = new Player({ id: "p1", x: w / 2, y: t0KickoffY, radius: 16, mass: 1.5, color: '#2563eb', team: 0, isActive: true, maxSpeed: 4 });
+        const p1 = new Player({ id: "p1", x: w / 2, y: t0KickoffY, radius: 16, mass: 1.5, color: t0Color, team: 0, isActive: true, stats: t0Roster[0].stats });
         world.addEntity(p1);
         activePlayerRef.current = p1;
 
-        world.addEntity(new Player({ x: w / 2 - 100, y: h - 150, radius: 16, mass: 1.5, color: '#2563eb', team: 0, maxSpeed: 3.5 }));
-        world.addEntity(new Player({ x: w / 2 + 100, y: h - 150, radius: 16, mass: 1.5, color: '#2563eb', team: 0, maxSpeed: 3.5 }));
+        world.addEntity(new Player({ x: w / 2 - 100, y: h - 150, radius: 16, mass: 1.5, color: t0Color, team: 0, stats: t0Roster[1].stats }));
+        world.addEntity(new Player({ x: w / 2 + 100, y: h - 150, radius: 16, mass: 1.5, color: t0Color, team: 0, stats: t0Roster[2].stats }));
 
-        const p2 = new Player({ id: "p2", x: w / 2, y: t1KickoffY, radius: 16, mass: 1.5, color: '#dc2626', team: 1, isActive: false, maxSpeed: 4 });
+        const p2 = new Player({ id: "p2", x: w / 2, y: t1KickoffY, radius: 16, mass: 1.5, color: t1Color, team: 1, isActive: false, stats: t1Roster[0].stats });
         world.addEntity(p2);
 
         for (let i=0; i<2; i++) {
@@ -175,9 +198,9 @@ const Sandbox: React.FC = () => {
             y: 150, 
             radius: 16, 
             mass: 1.5, 
-            color: '#dc2626', 
+            color: t1Color, 
             team: 1, 
-            maxSpeed: 3.5 
+            stats: t1Roster[i+1].stats
           }));
         }
     } else {
@@ -185,14 +208,14 @@ const Sandbox: React.FC = () => {
         const t0KickoffX = possessionTeamId === 0 ? w / 2 - 50 : 200;
         const t1KickoffX = possessionTeamId === 1 ? w / 2 + 50 : w - 200;
 
-        const p1 = new Player({ id: "p1", x: t0KickoffX, y: h / 2, radius: 16, mass: 1.5, color: '#2563eb', team: 0, isActive: true, maxSpeed: 4 });
+        const p1 = new Player({ id: "p1", x: t0KickoffX, y: h / 2, radius: 16, mass: 1.5, color: t0Color, team: 0, isActive: true, stats: t0Roster[0].stats });
         world.addEntity(p1);
         activePlayerRef.current = p1;
 
-        world.addEntity(new Player({ x: 150, y: h / 2 - 150, radius: 16, mass: 1.5, color: '#2563eb', team: 0, maxSpeed: 3.5 }));
-        world.addEntity(new Player({ x: 150, y: h / 2 + 150, radius: 16, mass: 1.5, color: '#2563eb', team: 0, maxSpeed: 3.5 }));
+        world.addEntity(new Player({ x: 150, y: h / 2 - 150, radius: 16, mass: 1.5, color: t0Color, team: 0, stats: t0Roster[1].stats }));
+        world.addEntity(new Player({ x: 150, y: h / 2 + 150, radius: 16, mass: 1.5, color: t0Color, team: 0, stats: t0Roster[2].stats }));
 
-        const p2 = new Player({ id: "p2", x: t1KickoffX, y: h / 2, radius: 16, mass: 1.5, color: '#dc2626', team: 1, isActive: false, maxSpeed: 4 });
+        const p2 = new Player({ id: "p2", x: t1KickoffX, y: h / 2, radius: 16, mass: 1.5, color: t1Color, team: 1, isActive: false, stats: t1Roster[0].stats });
         world.addEntity(p2);
 
         for (let i=0; i<2; i++) {
@@ -201,21 +224,47 @@ const Sandbox: React.FC = () => {
             y: h / 2 + (i === 0 ? -150 : 150), 
             radius: 16, 
             mass: 1.5, 
-            color: '#dc2626', 
+            color: t1Color, 
             team: 1, 
-            maxSpeed: 3.5 
+            stats: t1Roster[i+1].stats
           }));
         }
     }
 
     worldRef.current = world;
+    team0BrainRef.current = new TeamBrain(0, TEAMS[selectedTeamRef.current].aiIdentity || 'POSSESSION');
+    team1BrainRef.current = new TeamBrain(1, TEAMS[opponentTeamRef.current].aiIdentity || 'HIGH_PRESS');
   }, []);
+
+  const startMatch = useCallback(() => {
+    const randomPossession = Math.random() > 0.5 ? 0 : 1;
+    initWorld(randomPossession);
+    setScore({ team0: 0, team1: 0 });
+    setTimeRemaining(180);
+    updateGameState('PLAYING');
+  }, [initWorld, updateGameState]);
 
   useEffect(() => {
     if (dimensions.width > 0 && dimensions.height > 0 && !worldRef.current) {
         initWorld(0);
     }
   }, [dimensions.width, dimensions.height, initWorld]);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (gameState === 'PLAYING' && gameMode === 'TIMED') {
+        interval = setInterval(() => {
+            setTimeRemaining(prev => {
+                if (prev <= 1) {
+                    updateGameState('MAIN_MENU'); // or show match over
+                    return 0;
+                }
+                return prev - 1;
+            });
+        }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [gameState, gameMode, updateGameState]);
 
   useEffect(() => {
         const render = (time: number) => {
@@ -298,142 +347,30 @@ const Sandbox: React.FC = () => {
         };
         
         if (ball) {
-            let closestDstSq = Infinity;
-            let closestTeammate: Player | null = null;
-            
-            let closestDstSqT1 = Infinity;
-            let closestT1: Player | null = null;
-            
-            for (const entity of worldRef.current.entities) {
-                if (entity instanceof Player) {
-                    const dstSq = entity.pos.sub(ball.pos).magSq();
-                    if (entity.team === 0) {
-                        if (dstSq < closestDstSq) {
-                            closestDstSq = dstSq;
-                            closestTeammate = entity;
-                        }
-                    } else if (entity.team === 1) {
-                        if (dstSq < closestDstSqT1) {
-                            closestDstSqT1 = dstSq;
-                            closestT1 = entity;
-                        }
-                    }
-                }
-            }
-
             const playerControlled = gameStateRef.current === 'PLAYING' ? activePlayerRef.current : null;
 
-            if (closestTeammate && closestTeammate !== playerControlled) {
-                if (playerControlled) playerControlled.isActive = false;
-                closestTeammate.isActive = true;
-                if (gameStateRef.current === 'PLAYING') {
-                    activePlayerRef.current = closestTeammate;
-                }
+            // Check if kickoff has occurred
+            if (!kickoffOccurredRef.current && ball.vel.magSq() > 1) {
+                kickoffOccurredRef.current = true;
             }
 
+            // Removed auto-switch logic
+            // User now manually switches via a button
+
             // AI Logic
-            for (const entity of worldRef.current.entities) {
-                if (entity instanceof Player && entity !== playerControlled) {
-                    let targetPos = entity.pos;
-                    let speed = 0;
-                    
-                    if (entity.team === 1) {
-                        // AI Opponent
-                        const ownGoalCenter = isPortrait ? new Vector2(w/2, 0) : new Vector2(w, h/2);
-                        const targetGoalCenter = isPortrait ? new Vector2(w/2, h) : new Vector2(0, h/2);
-
-                        if (entity === closestT1) {
-                            // Chase ball, but try to approach from the side that pushes it toward the target goal
-                            const toTargetGoal = targetGoalCenter.sub(ball.pos).normalize();
-                            // Position to aim for is slightly "behind" the ball relative to the goal
-                            const approachPos = ball.pos.sub(toTargetGoal.mult(20));
-                            
-                            // If we are relatively "behind" the ball already, we can just push directly through it
-                            const toBall = ball.pos.sub(entity.pos).normalize();
-                            const angleSimilarity = toBall.dot(toTargetGoal);
-
-                            if (angleSimilarity > 0.5) {
-                                // We're behind it, push through to goal
-                                targetPos = ball.pos.add(toTargetGoal.mult(20));
-
-                                // AI dash/shoot mechanic
-                                const distSq = entity.pos.sub(ball.pos).magSq();
-                                if (distSq < 4800 && Math.random() < 0.05) { // Roughly 70px away
-                                    entity.applyForce(toBall.mult(60));
-                                }
-                            } else {
-                                // We are on the wrong side, run to the approach pos
-                                targetPos = approachPos;
-                            }
-                            
-                            speed = 1.0; 
-                        } else {
-                            // Support/Defend
-                            // Stay further back, covering the goal side
-                            targetPos = ball.pos.add(ownGoalCenter.mult(2)).div(3);
-                            
-                            // Spread out slightly
-                            if (isPortrait) {
-                                targetPos.x = entity.pos.x * 0.8 + (w/2) * 0.2;
-                            } else {
-                                targetPos.y = entity.pos.y * 0.8 + (h/2) * 0.2;
-                            }
-                            speed = 0.7;
+            if (team0BrainRef.current && team1BrainRef.current && ball) {
+                team0BrainRef.current.update(worldRef.current, ball, time);
+                team1BrainRef.current.update(worldRef.current, ball, time);
+                
+                for (const entity of worldRef.current.entities) {
+                    if (entity instanceof Player && entity !== playerControlled) {
+                        // Kickoff Wait Rule: Players on the non-kickoff team cannot engage until the ball is touched
+                        if (!kickoffOccurredRef.current && entity.team !== kickoffTeamRef.current) {
+                            continue;
                         }
-                    } else if (entity.team === 0) {
-                        // Teammate AI / Team 0 AI
-                        const opponentGoalCenter = isPortrait ? new Vector2(w/2, 0) : new Vector2(w, h/2);
-                        const ownGoalCenter = isPortrait ? new Vector2(w/2, h) : new Vector2(0, h/2);
-                        
-                        if (entity === closestTeammate) {
-                            // Primary Team 0 AI (behaves like Team 1 AI)
-                            const toTargetGoal = opponentGoalCenter.sub(ball.pos).normalize();
-                            const approachPos = ball.pos.sub(toTargetGoal.mult(20));
-                            
-                            const toBall = ball.pos.sub(entity.pos).normalize();
-                            const angleSimilarity = toBall.dot(toTargetGoal);
 
-                            if (angleSimilarity > 0.5) {
-                                targetPos = ball.pos.add(toTargetGoal.mult(20));
-                                const distSq = entity.pos.sub(ball.pos).magSq();
-                                if (distSq < 4800 && Math.random() < 0.05) {
-                                    entity.applyForce(toBall.mult(60));
-                                }
-                            } else {
-                                targetPos = approachPos;
-                            }
-                            speed = 1.0;
-                        } else {
-                            // Support/Defend
-                            const distToOurGoal = ball.pos.sub(ownGoalCenter).mag();
-                            
-                            if (distToOurGoal < (isPortrait ? h/3 : w/3)) {
-                                targetPos = ball.pos.add(ownGoalCenter).div(2);
-                            } else {
-                                targetPos = ball.pos.add(opponentGoalCenter).div(2);
-                                if (isPortrait) {
-                                    const wingX = entity.pos.x < w/2 ? w/4 : (w*3)/4;
-                                    targetPos.x = targetPos.x * 0.3 + wingX * 0.7;
-                                } else {
-                                    const wingY = entity.pos.y < h/2 ? h/4 : (h*3)/4;
-                                    targetPos.y = targetPos.y * 0.3 + wingY * 0.7;
-                                }
-                            }
-                            speed = 0.8;
-                        }
-                    }
-                    
-                    // Restrict non-primary AI from entering the penalty boxes
-                    // so there is only one AI per team allowed in the 18-yard box.
-                    if ((entity.team === 1 && entity !== closestT1) || (entity.team === 0 && entity !== closestTeammate)) {
-                        // All non-primary players stay out, including teammates since user controls one Primary
-                        targetPos = clampToPenaltyBoxEdge(targetPos);
-                    }
-                    
-                    const dir = targetPos.sub(entity.pos);
-                    // Move if not super close to target
-                    if (dir.magSq() > 400) {
-                        entity.applyForce(dir.normalize().mult(speed));
+                        const brain = entity.team === 0 ? team0BrainRef.current : team1BrainRef.current;
+                        PlayerAI.update(entity, worldRef.current, ball, brain, isPortrait, clampToPenaltyBoxEdge);
                     }
                 }
             }
@@ -769,7 +706,9 @@ const Sandbox: React.FC = () => {
 
         // Handle dash replenish timer
         if (dashesRef.current < maxDashes) {
-            dashProgressRef.current += deltaMs / 1000; // 1 second to replenish
+            const recoveryStat = activePlayerRef.current?.stats.recoverySpeed || 80;
+            const recoveryMultiplier = 0.5 + (recoveryStat / 100) * 0.75;
+            dashProgressRef.current += (deltaMs / 1000) * recoveryMultiplier; // Adjusted by recoverySpeed
             if (dashProgressRef.current >= 1) {
                 const surplus = Math.floor(dashProgressRef.current);
                 dashesRef.current = Math.min(maxDashes, dashesRef.current + surplus);
@@ -793,6 +732,33 @@ const Sandbox: React.FC = () => {
         }
     }
   }, []);
+
+  const handleSwitchPlayer = (e?: React.MouseEvent | React.PointerEvent) => {
+    if (e) e.stopPropagation();
+    if (gameStateRef.current !== 'PLAYING' || !worldRef.current) return;
+    
+    const ball = worldRef.current.entities.find(e => e instanceof Ball) as Ball | undefined;
+    if (!ball) return;
+
+    let closestTeammate: Player | null = null;
+    let closestDstSq = Infinity;
+
+    for (const entity of worldRef.current.entities) {
+        if (entity instanceof Player && entity.team === 0) {
+            const dstSq = entity.pos.sub(ball.pos).magSq();
+            if (dstSq < closestDstSq) {
+                closestDstSq = dstSq;
+                closestTeammate = entity;
+            }
+        }
+    }
+
+    if (closestTeammate && closestTeammate !== activePlayerRef.current) {
+        if (activePlayerRef.current) activePlayerRef.current.isActive = false;
+        closestTeammate.isActive = true;
+        activePlayerRef.current = closestTeammate;
+    }
+  };
 
   const handlePointerDown = (e: React.PointerEvent) => {
     // Only capture primary buttons or touches
@@ -830,7 +796,8 @@ const Sandbox: React.FC = () => {
                         if (dashProgressRef.current === 1) dashProgressRef.current = 0; // reset progress when consuming full max
                         
                         const dashVec = dirToBall.normalize();
-                        player.applyForce(dashVec.mult(60)); // Slowed down from 150
+                        const dashForce = 30 + (player.stats.shotPower / 100) * 45;
+                        player.applyForce(dashVec.mult(dashForce));
                     }
                 }
             }
@@ -856,6 +823,20 @@ const Sandbox: React.FC = () => {
       }
   }
 
+  const [errorObj, setErrorObj] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleError = (e: ErrorEvent) => {
+      setErrorObj(e.message + "\n" + e.filename + " " + e.lineno + ":" + e.colno + "\n" + e.error?.stack);
+    };
+    window.addEventListener('error', handleError);
+    return () => window.removeEventListener('error', handleError);
+  }, []);
+
+  if (errorObj) {
+    return <div className="absolute inset-0 bg-red-500 text-white p-8 z-50 overflow-auto whitespace-pre-wrap">{errorObj}</div>;
+  }
+
   return (
     <div className="relative w-full h-screen bg-[#f4f4f0] text-[#111827] flex flex-col overflow-hidden font-sans select-none border-8 border-[#111827]">
       
@@ -863,6 +844,7 @@ const Sandbox: React.FC = () => {
       <AnimatePresence>
         {(gameState === 'PLAYING' || gameState === 'PAUSED') && (
           <motion.div 
+            key="scoreboard"
             initial={{ y: -100 }}
             animate={{ y: 0 }}
             exit={{ y: -100 }}
@@ -871,8 +853,8 @@ const Sandbox: React.FC = () => {
             <div className="flex items-center gap-6 bg-white border-4 border-[#111827] px-8 py-3 rounded-2xl shadow-[4px_4px_0_0_#111827] pointer-events-auto">
               <div className={`text-2xl font-bold tracking-wider ${TEAMS[selectedTeam].text}`}>{TEAMS[selectedTeam].name}</div>
               <div className="text-3xl font-black">{score.team0}<span className="mx-2 text-gray-400">:</span>{score.team1}</div>
-              <div className={`text-2xl font-bold tracking-wider ${selectedTeam === 1 ? TEAMS[2].text : TEAMS[1].text}`}>
-                {selectedTeam === 1 ? TEAMS[2].name : TEAMS[1].name}
+              <div className={`text-2xl font-bold tracking-wider ${TEAMS[opponentTeam].text}`}>
+                {TEAMS[opponentTeam].name}
               </div>
               
               <button 
@@ -884,7 +866,7 @@ const Sandbox: React.FC = () => {
             </div>
             {gameMode === 'TIMED' && (
               <div className="mt-4 bg-white border-4 border-[#111827] shadow-[4px_4px_0_0_#111827] px-6 py-1 rounded-full text-2xl font-bold">
-                74:22
+                {`${Math.floor(timeRemaining / 60)}:${(timeRemaining % 60).toString().padStart(2, '0')}`}
               </div>
             )}
           </motion.div>
@@ -909,6 +891,7 @@ const Sandbox: React.FC = () => {
         <AnimatePresence>
             {gameState === 'PLAYING' && (
                 <div 
+                  key="joystick"
                   ref={joystickBaseUiRef} 
                   className="absolute w-48 h-48 rounded-full border-4 border-[#111827] border-dashed flex items-center justify-center pointer-events-none transition-opacity duration-150 z-10"
                   style={{ opacity: 0 }}
@@ -921,21 +904,36 @@ const Sandbox: React.FC = () => {
             )}
         </AnimatePresence>
         
-        {/* "Flick" zone visual indicator (right side) */}
+        {/* "Shoot" zone visual indicator (right side) */}
         <AnimatePresence>
             {gameState === 'PLAYING' && (
                 <motion.div 
+                    key="shoot-zone"
                     initial={{ opacity: 0 }} animate={{ opacity: 0.9 }} exit={{ opacity: 0 }}
                     className="absolute bottom-12 right-12 flex flex-col items-center justify-center pointer-events-none z-10 w-28 h-28 bg-white rounded-full border-4 border-[#111827] shadow-[4px_4px_0_0_#111827]"
                 >
-                    <span className="text-2xl font-black text-[#111827] tracking-tighter">FLICK</span>
+                    <span className="text-2xl font-black text-[#111827] tracking-tighter">SHOOT</span>
                 </motion.div>
+            )}
+        </AnimatePresence>
+        <AnimatePresence>
+            {gameState === 'PLAYING' && (
+                <motion.button 
+                    key="switch-button"
+                    initial={{ opacity: 0 }} animate={{ opacity: 0.9 }} exit={{ opacity: 0 }}
+                    onClick={handleSwitchPlayer}
+                    onPointerDown={(e) => { e.stopPropagation(); handleSwitchPlayer(e); }}
+                    className="absolute bottom-48 right-16 flex flex-col items-center justify-center z-10 w-20 h-20 bg-white hover:bg-gray-50 text-[#111827] rounded-full border-4 border-[#111827] shadow-[4px_4px_0_0_#111827] active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all pointer-events-auto"
+                >
+                    <span className="text-sm font-black tracking-tighter">SWITCH</span>
+                </motion.button>
             )}
         </AnimatePresence>
 
         <AnimatePresence>
-          {showGoalOverlay && (
+          {(gameState === 'PLAYING' || gameState === 'PAUSED') && showGoalOverlay && (
             <motion.div
+              key="goal-overlay"
               initial={{ opacity: 0, scale: 0.8 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 1.2 }}
@@ -977,6 +975,7 @@ const Sandbox: React.FC = () => {
           {/* PAUSE MENU OVERLAY */}
           {gameState === 'PAUSED' && (
             <motion.div
+              key="pause-menu"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="absolute inset-0 z-40 bg-black/40 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-auto"
             >
@@ -1011,6 +1010,7 @@ const Sandbox: React.FC = () => {
           {/* MAIN MENU OVERLAY */}
           {gameState === 'MAIN_MENU' && (
             <motion.div
+              key="main-menu"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="absolute inset-0 z-40 bg-white/20 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-auto p-4"
             >
@@ -1026,8 +1026,7 @@ const Sandbox: React.FC = () => {
               >
                 <div className="absolute -top-10 -right-10 w-32 h-32 bg-[#22c55e] rounded-full border-4 border-[#111827] opacity-20"></div>
                 
-                <h1 className="text-6xl font-black mb-2 tracking-tighter text-center">SOCCER</h1>
-                <p className="text-xl font-bold text-gray-500 mb-10 tracking-tight">PAPER EDITION</p>
+                <h1 className="text-6xl font-black mb-10 tracking-tighter text-center uppercase">FOOTY FRENZY</h1>
                 
                 <div className="flex flex-col gap-5 w-full">
                   <button 
@@ -1035,13 +1034,6 @@ const Sandbox: React.FC = () => {
                     className="w-full bg-[#fbbf24] hover:bg-[#f59e0b] text-[#111827] border-4 border-[#111827] shadow-[6px_6px_0_0_#111827] py-5 rounded-2xl font-black text-2xl active:translate-y-[6px] active:translate-x-[6px] active:shadow-none transition-all flex items-center justify-center gap-4"
                   >
                     <Play size={28} fill="currentColor" /> PLAY NOW
-                  </button>
-                  
-                  <button 
-                    onClick={() => updateGameState('TEAM_SELECT')}
-                    className="w-full bg-[#3b82f6] hover:bg-[#2563eb] text-white border-4 border-[#111827] shadow-[6px_6px_0_0_#111827] py-5 rounded-2xl font-black text-2xl active:translate-y-[6px] active:translate-x-[6px] active:shadow-none transition-all flex items-center justify-center gap-4"
-                  >
-                    <Users size={28} /> TEAMS
                   </button>
                 </div>
               </motion.div>
@@ -1051,23 +1043,24 @@ const Sandbox: React.FC = () => {
           {/* MODE SELECT OVERLAY */}
           {gameState === 'MODE_SELECT' && (
             <motion.div
+              key="mode-select"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="absolute inset-0 z-40 bg-white/20 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-auto p-4"
             >
               <motion.div 
                 initial={{ scale: 0.9, x: 20 }} animate={{ scale: 1, x: 0 }} exit={{ scale: 0.9, x: -20 }}
-                className="w-full max-w-2xl bg-white border-4 border-[#111827] shadow-[12px_12px_0_0_#111827] rounded-3xl p-10 flex flex-col items-center"
+                className="w-full max-w-2xl bg-white border-4 border-[#111827] shadow-[12px_12px_0_0_#111827] rounded-3xl p-6 sm:p-10 flex flex-col items-center max-h-[90vh]"
               >
-                <div className="w-full flex items-center justify-between mb-10">
+                <div className="w-full flex items-center justify-between mb-6 sm:mb-10 shrink-0">
                     <button onClick={() => updateGameState('MAIN_MENU')} className="p-2 border-4 border-[#111827] rounded-full hover:bg-gray-100 active:scale-95 transition-transform"><X size={24} strokeWidth={3}/></button>
-                    <h2 className="text-4xl font-black tracking-tighter">GAME MODE</h2>
+                    <h2 className="text-3xl sm:text-4xl font-black tracking-tighter text-center">GAME MODE</h2>
                     <div className="w-12"></div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 w-full overflow-y-auto custom-scrollbar pr-2 pb-2">
                   <button 
-                    onClick={() => { setScore({ team0: 0, team1: 0 }); setGameMode('FREEPLAY'); updateGameState('PLAYING'); }}
-                    className="flex flex-col items-center gap-4 p-8 bg-white border-4 border-[#111827] rounded-2xl hover:bg-gray-50 active:scale-95 transition-transform shadow-[4px_4px_0_0_#111827] group"
+                    onClick={() => { setGameMode('FREEPLAY'); updateGameState('USER_TEAM_SELECT'); }}
+                    className="flex flex-col items-center gap-2 sm:gap-4 p-6 sm:p-8 bg-white border-4 border-[#111827] rounded-2xl hover:bg-gray-50 active:scale-95 transition-transform shadow-[4px_4px_0_0_#111827] group"
                   >
                     <div className="w-20 h-20 rounded-full bg-[#fbbf24] border-4 border-[#111827] flex items-center justify-center group-hover:scale-110 transition-transform">
                         <MonitorPlay size={36} />
@@ -1079,7 +1072,7 @@ const Sandbox: React.FC = () => {
                   </button>
 
                   <button 
-                    onClick={() => { setScore({ team0: 0, team1: 0 }); setGameMode('TIMED'); updateGameState('PLAYING'); }}
+                    onClick={() => { setGameMode('TIMED'); updateGameState('USER_TEAM_SELECT'); }}
                     className="flex flex-col items-center gap-4 p-8 bg-white border-4 border-[#111827] rounded-2xl hover:bg-gray-50 active:scale-95 transition-transform shadow-[4px_4px_0_0_#111827] group"
                   >
                     <div className="w-20 h-20 rounded-full bg-[#22c55e] border-4 border-[#111827] flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -1108,40 +1101,190 @@ const Sandbox: React.FC = () => {
           )}
           
           {/* TEAM SELECT OVERLAY */}
-          {gameState === 'TEAM_SELECT' && (
+          {gameState === 'USER_TEAM_SELECT' && (
             <motion.div
+              key="user-team-select"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="absolute inset-0 z-40 bg-white/20 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-auto p-4"
             >
               <motion.div 
                 initial={{ scale: 0.9, x: -20 }} animate={{ scale: 1, x: 0 }} exit={{ scale: 0.9, x: 20 }}
-                className="w-full max-w-2xl bg-white border-4 border-[#111827] shadow-[12px_12px_0_0_#111827] rounded-3xl p-10 flex flex-col items-center"
+                className="w-full max-w-4xl bg-white border-4 border-[#111827] shadow-[12px_12px_0_0_#111827] rounded-3xl p-6 sm:p-10 flex flex-col items-center max-h-[90vh]"
               >
-                <div className="w-full flex items-center justify-between mb-10">
-                    <button onClick={() => updateGameState('MAIN_MENU')} className="p-2 border-4 border-[#111827] rounded-full hover:bg-gray-100 active:scale-95 transition-transform"><X size={24} strokeWidth={3}/></button>
-                    <h2 className="text-4xl font-black tracking-tighter">SELECT TEAM</h2>
+                <div className="w-full flex items-center justify-between mb-6 shrink-0">
+                    <button onClick={() => updateGameState('MODE_SELECT')} className="p-2 border-4 border-[#111827] rounded-full hover:bg-gray-100 active:scale-95 transition-transform"><X size={24} strokeWidth={3}/></button>
+                    <h2 className="text-2xl sm:text-4xl font-black tracking-tighter text-center">SELECT YOUR TEAM</h2>
                     <div className="w-12"></div>
                 </div>
                 
-                <div className="grid grid-cols-2 gap-4 w-full">
-                    {TEAMS.map(team => (
-                        <button
-                            key={team.id}
-                            onClick={() => setSelectedTeam(team.id)}
-                            className={`flex items-center gap-4 p-4 border-4 border-[#111827] rounded-2xl active:scale-95 transition-transform ${selectedTeam === team.id ? 'bg-gray-100 shadow-none translate-y-1 translate-x-1' : 'bg-white shadow-[4px_4px_0_0_#111827]'}`}
-                        >
-                            <div className="w-12 h-12 rounded-full border-4 border-[#111827]" style={{ backgroundColor: team.color }}></div>
-                            <span className="text-2xl font-black">{team.name}</span>
-                        </button>
-                    ))}
+                <div className="w-full flex-1 overflow-y-auto pr-4 pb-4 custom-scrollbar flex flex-col gap-8">
+                    {['CONCACAF', 'UEFA', 'CONMEBOL', 'CAF', 'AFC', 'OFC'].map(region => {
+                        const regionTeams = TEAMS.filter(t => t.region === region);
+                        if (regionTeams.length === 0) return null;
+                        return (
+                            <div key={region} className="w-full">
+                                <h4 className="text-lg font-bold mb-3 uppercase tracking-wider text-gray-400">{region}</h4>
+                                <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-3 w-full">
+                                    {regionTeams.map(team => (
+                                        <button
+                                            key={team.id}
+                                            onClick={() => setSelectedTeam(team.id)}
+                                            className={`relative flex flex-col items-center justify-center gap-2 p-2 border-4 rounded-xl active:scale-95 transition-all ${selectedTeam === team.id ? 'border-[#3b82f6] bg-blue-50 shadow-none translate-y-1 translate-x-1' : 'border-[#111827] bg-white shadow-[2px_2px_0_0_#111827]'}`}
+                                        >
+                                            {selectedTeam === team.id && (
+                                              <div className="absolute -top-3 -right-3 w-6 h-6 bg-[#3b82f6] rounded-full border-2 border-white flex items-center justify-center text-white">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                              </div>
+                                            )}
+                                            <div className="w-8 h-8 rounded-full border-2 border-[#111827]" style={{ backgroundColor: team.color }}></div>
+                                            <span className="text-sm font-black">{team.name}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
                 
-                <div className="w-full mt-10 flex justify-end">
+                <div className="w-full mt-6 pt-6 border-t-4 border-gray-100 flex flex-col lg:flex-row items-center justify-between gap-6 shrink-0">
+                    <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 lg:gap-8 w-full lg:w-auto">
+                      {(() => {
+                        const team = TEAMS.find(t => t.id === selectedTeam);
+                        if (!team) return null;
+                        const avgShot = Math.round(team.roster.reduce((sum, p) => sum + p.stats.shotPower, 0) / team.roster.length);
+                        const avgSpeed = Math.round(team.roster.reduce((sum, p) => sum + p.stats.sprintSpeed, 0) / team.roster.length);
+                        const avgRecov = Math.round(team.roster.reduce((sum, p) => sum + p.stats.recoverySpeed, 0) / team.roster.length);
+                        return (
+                          <>
+                            <div className="flex flex-col min-w-[80px]">
+                              <span className="text-xs font-bold text-gray-400 uppercase">Play Style</span>
+                              <span className="font-black text-sm uppercase">{team.aiIdentity.replace('_', ' ')}</span>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-gray-400 uppercase">Shot Power</span>
+                              <div className="flex items-center gap-2">
+                                <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-[#ef4444]" style={{ width: `${avgShot}%` }}></div></div>
+                                <span className="font-black text-sm w-6">{avgShot}</span>
+                              </div>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-gray-400 uppercase">Sprint Speed</span>
+                              <div className="flex items-center gap-2">
+                                <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-[#3b82f6]" style={{ width: `${avgSpeed}%` }}></div></div>
+                                <span className="font-black text-sm w-6">{avgSpeed}</span>
+                              </div>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-gray-400 uppercase">Recovery</span>
+                              <div className="flex items-center gap-2">
+                                <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-[#10b981]" style={{ width: `${avgRecov}%` }}></div></div>
+                                <span className="font-black text-sm w-6">{avgRecov}</span>
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
                     <button 
-                        onClick={() => updateGameState('MAIN_MENU')}
-                        className="bg-[#22c55e] hover:bg-[#16a34a] text-[#111827] border-4 border-[#111827] shadow-[4px_4px_0_0_#111827] px-8 py-3 rounded-xl font-black text-xl active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all"
+                        onClick={() => updateGameState('OPPONENT_TEAM_SELECT')}
+                        className="bg-[#3b82f6] hover:bg-[#2563eb] text-white border-4 border-[#111827] shadow-[4px_4px_0_0_#111827] px-8 py-3 rounded-xl font-black text-xl active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all flex items-center gap-3 w-full sm:w-auto justify-center"
                     >
-                        DONE
+                        NEXT STEP
+                    </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+
+          {gameState === 'OPPONENT_TEAM_SELECT' && (
+            <motion.div
+              key="opponent-team-select"
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 z-40 bg-white/20 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-auto p-4"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, x: 20 }} animate={{ scale: 1, x: 0 }} exit={{ scale: 0.9, x: -20 }}
+                className="w-full max-w-4xl bg-white border-4 border-[#111827] shadow-[12px_12px_0_0_#111827] rounded-3xl p-6 sm:p-10 flex flex-col items-center max-h-[90vh]"
+              >
+                <div className="w-full flex items-center justify-between mb-6 shrink-0">
+                    <button onClick={() => updateGameState('USER_TEAM_SELECT')} className="p-2 border-4 border-[#111827] rounded-full hover:bg-gray-100 active:scale-95 transition-transform"><X size={24} strokeWidth={3}/></button>
+                    <h2 className="text-2xl sm:text-4xl font-black tracking-tighter text-center">SELECT OPPONENT</h2>
+                    <div className="w-12"></div>
+                </div>
+                
+                <div className="w-full flex-1 overflow-y-auto pr-4 pb-4 custom-scrollbar flex flex-col gap-8">
+                    {['CONCACAF', 'UEFA', 'CONMEBOL', 'CAF', 'AFC', 'OFC'].map(region => {
+                        const regionTeams = TEAMS.filter(t => t.region === region);
+                        if (regionTeams.length === 0) return null;
+                        return (
+                            <div key={region} className="w-full">
+                                <h4 className="text-lg font-bold mb-3 uppercase tracking-wider text-gray-400">{region}</h4>
+                                <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-3 w-full">
+                                    {regionTeams.map(team => (
+                                        <button
+                                            key={team.id}
+                                            onClick={() => setOpponentTeam(team.id)}
+                                            className={`relative flex flex-col items-center justify-center gap-2 p-2 border-4 rounded-xl active:scale-95 transition-all ${opponentTeam === team.id ? 'border-[#ef4444] bg-red-50 shadow-none translate-y-1 translate-x-1' : 'border-[#111827] bg-white shadow-[2px_2px_0_0_#111827]'}`}
+                                        >
+                                            {opponentTeam === team.id && (
+                                              <div className="absolute -top-3 -right-3 w-6 h-6 bg-[#ef4444] rounded-full border-2 border-white flex items-center justify-center text-white">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                              </div>
+                                            )}
+                                            <div className="w-8 h-8 rounded-full border-2 border-[#111827]" style={{ backgroundColor: team.color }}></div>
+                                            <span className="text-sm font-black">{team.name}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+                
+                <div className="w-full mt-6 pt-6 border-t-4 border-gray-100 flex flex-col lg:flex-row items-center justify-between gap-6 shrink-0">
+                    <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 lg:gap-8 w-full lg:w-auto">
+                      {(() => {
+                        const team = TEAMS.find(t => t.id === opponentTeam);
+                        if (!team) return null;
+                        const avgShot = Math.round(team.roster.reduce((sum, p) => sum + p.stats.shotPower, 0) / team.roster.length);
+                        const avgSpeed = Math.round(team.roster.reduce((sum, p) => sum + p.stats.sprintSpeed, 0) / team.roster.length);
+                        const avgRecov = Math.round(team.roster.reduce((sum, p) => sum + p.stats.recoverySpeed, 0) / team.roster.length);
+                        return (
+                          <>
+                            <div className="flex flex-col min-w-[80px]">
+                              <span className="text-xs font-bold text-gray-400 uppercase">Play Style</span>
+                              <span className="font-black text-sm uppercase">{team.aiIdentity.replace('_', ' ')}</span>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-gray-400 uppercase">Shot Power</span>
+                              <div className="flex items-center gap-2">
+                                <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-[#ef4444]" style={{ width: `${avgShot}%` }}></div></div>
+                                <span className="font-black text-sm w-6">{avgShot}</span>
+                              </div>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-gray-400 uppercase">Sprint Speed</span>
+                              <div className="flex items-center gap-2">
+                                <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-[#3b82f6]" style={{ width: `${avgSpeed}%` }}></div></div>
+                                <span className="font-black text-sm w-6">{avgSpeed}</span>
+                              </div>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-gray-400 uppercase">Recovery</span>
+                              <div className="flex items-center gap-2">
+                                <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-[#10b981]" style={{ width: `${avgRecov}%` }}></div></div>
+                                <span className="font-black text-sm w-6">{avgRecov}</span>
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                    <button 
+                        onClick={startMatch}
+                        className="bg-[#22c55e] hover:bg-[#16a34a] text-[#111827] border-4 border-[#111827] shadow-[4px_4px_0_0_#111827] px-8 py-3 rounded-xl font-black text-xl active:translate-y-[4px] active:translate-x-[4px] active:shadow-none transition-all flex items-center gap-3 w-full sm:w-auto justify-center"
+                    >
+                        <Play size={20} fill="currentColor" /> START MATCH
                     </button>
                 </div>
               </motion.div>

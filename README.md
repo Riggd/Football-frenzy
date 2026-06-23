@@ -1,20 +1,38 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Footy Frenzy
 
-# Run and deploy your AI Studio app
+Footy Frenzy is a vector-based HTML5 canvas 2D physics sandbox for a Tron-style 3v3 soccer game.
 
-This contains everything you need to run your app locally.
+## Features
 
-View your app in AI Studio: https://ai.studio/apps/094ac5a2-ee2b-4b83-8b6d-a7460183d745
+- **Physics-based Gameplay:** Realistic 2D physics and collisions using custom mechanics.
+- **Dynamic AI:** Opponent and teammate AI utilizing varying playstyles (e.g., High Press, Possession, Direct).
+- **Match Modes:** Play full timed matches or practice in sandbox mode.
+- **National Teams:** Play as various nations from different regional federations with differing stats and team ratings.
+- **Interactive Mechanics:** Flick and dash mechanics to simulate tackling and shooting.
 
-## Run Locally
+## Running Locally
 
-**Prerequisites:**  Node.js
+To run this project locally, make sure you have [Node.js](https://nodejs.org/) installed, then follow these steps:
 
+1. **Install dependencies:**
+   ```bash
+   npm install
+   ```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+2. **Start the development server:**
+   ```bash
+   npm run dev
+   ```
+
+3. **Open in your browser:**
+   The development server will usually start at `http://localhost:3000`. Check your terminal output for the exact URL.
+
+## Building for Production
+
+To create a production build:
+
+```bash
+npm run build
+```
+
+This will bundle the application into the `dist/` directory, which can then be served statically.

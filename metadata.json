@@ -1,5 +1,5 @@
 {
-  "name": "Neon Striker Engine",
+  "name": "Footy Frenzy",
   "description": "Vector-based HTML5 canvas 2D physics sandbox for a Tron-style 3v3 soccer game.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
