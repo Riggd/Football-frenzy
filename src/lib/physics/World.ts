@@ -8,6 +8,7 @@ export class World {
   height: number;
 
   onGoal?: (teamScoredId: number) => void;
+  onCollision?: (pos: Vector2, intensity: number) => void;
   goalWidth: number = 0;
   isPortrait: boolean = false;
 
@@ -158,6 +159,12 @@ export class World {
 
           // Do not resolve if velocities are separating
           if (velAlongNormal > 0) continue;
+
+          if (this.onCollision && Math.abs(velAlongNormal) > 1.0) {
+              if (e1 instanceof Ball || e2 instanceof Ball) {
+                  this.onCollision(e1.pos.add(normal.mult(e1.radius)), Math.abs(velAlongNormal));
+              }
+          }
 
           const e = Math.min(e1.restitution, e2.restitution);
           let jMagnitude = -(1 + e) * velAlongNormal;
